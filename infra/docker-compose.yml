@@ -1,0 +1,50 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cairn
+      POSTGRES_PASSWORD: cairn
+      POSTGRES_DB: cairn
+    ports: ["5432:5432"]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+  model-service:
+    build:
+      context: ../
+      dockerfile_inline: |
+        FROM python:3.11-slim
+        WORKDIR /app
+        RUN pip install fastapi uvicorn[standard] pandas numpy ta lightgbm shap pydantic-settings ccxt
+        COPY model-service /app/model-service
+        CMD ["uvicorn","model-service.app:app","--host","0.0.0.0","--port","8001"]
+    ports: ["8001:8001"]
+    depends_on: [db, redis]
+  executor:
+    build:
+      context: ../executor
+      dockerfile_inline: |
+        FROM node:20
+        WORKDIR /app
+        COPY package*.json ./
+        RUN npm ci || npm i
+        COPY . .
+        CMD ["node","index.js"]
+    environment:
+      MODEL_URL: http://model-service:8001/signal
+    depends_on: [model-service]
+  webapp:
+    build:
+      context: ../webapp
+      dockerfile_inline: |
+        FROM node:20 as build
+        WORKDIR /app
+        COPY package*.json ./
+        RUN npm ci || npm i
+        COPY . .
+        RUN npm run build
+        FROM nginx:alpine
+        COPY --from=build /app/dist /usr/share/nginx/html
+    ports: ["5173:80"]
+    depends_on: [model-service]
